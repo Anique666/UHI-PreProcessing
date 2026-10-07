@@ -1,0 +1,37 @@
+# ---- Data / generated artifacts (never commit) ----
+*.tif
+*.tiff
+*.pt
+*.pth
+*.npy
+*.npz
+
+# Pipeline input/output directories
+processed_temporal/
+processed_dataset/
+processed_tensors/
+processed_single/
+
+# Large generated diagnostics
+diagnostics/generated/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Environments / editors / secrets ----
+.venv/
+venv/
+env/
+.env
+.vscode/
+.idea/
+*.swp
+
+# ---- OS ----
+.DS_Store
+Thumbs.db

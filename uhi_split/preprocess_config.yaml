@@ -1,0 +1,82 @@
+# =============================================================================
+# UHI forecasting - spatial-split / normalization / tensor-building pipeline
+# -----------------------------------------------------------------------------
+# Standalone stage. It CONSUMES the already-interpolated monthly TIFFs produced
+# by the previous temporal pipeline. It never modifies raw inputs and never
+# reruns temporal interpolation.
+#
+# >>> SET THESE PATHS for your own data before running (see README.md). <<<
+#   input_dir     : directory of monthly *18features*.tif files
+#   output_dir    : where the lightweight dataset artifact is written
+#   bbmp_boundary : GeoJSON polygon of the modeling area
+# The paths below are placeholders; the loader validates that input_dir and
+# bbmp_boundary exist and fails loudly if they do not.
+#
+# Switch modes from the CLI only; this file does not need editing between a
+# test run and a full run:
+#   python preprocess.py --config preprocess_config.yaml --mode test
+#   python preprocess.py --config preprocess_config.yaml --mode full
+# =============================================================================
+
+paths:
+  input_dir: /path/to/processed_temporal
+  output_dir: /path/to/processed_dataset
+  bbmp_boundary: /path/to/boundary.geojson
+
+data:
+  expected_start: "2019-01"
+  expected_end: "2024-12"
+  sequence_length: 12          # past months used as input
+  patch_size: 128
+  stride: 64                   # default; configurable
+  purity_threshold: 0.90       # fraction of patch pixels that must match one split
+  max_gap_fraction: 0.10       # warn if a channel exceeds this train missingness
+  max_open_rasters: 24         # per-worker reader cache for lazy windowed reads
+
+  # Nominal feature-channel order. The loader CHECKS the TIFF band descriptions
+  # against this list and refuses to proceed on disagreement. This is the
+  # authoritative order used for the tensors.
+  channel_names:
+    - LST_Celsius
+    - NDVI
+    - NDBI
+    - MNDWI
+    - EVI
+    - Albedo
+    - Vegetation_Frac
+    - Impervious_Frac
+    - Soil_Frac
+    - Elevation
+    - Slope
+    - S2_B2
+    - S2_B3
+    - S2_B4
+    - S2_B8
+    - S2_B11
+    - AirTemp_2m_C
+    - Dewpoint_2m_C
+  lst_channel: LST_Celsius
+  terrain_channels: [Elevation, Slope]   # static channels averaged for train stats
+
+split:
+  # ---------------------------------------------------------------------------
+  # Reproducible directional-quantile partition of the BBMP/modeling area.
+  #
+  #   test  = north-most test_fraction of the area, defined by a rotation-
+  #           controlled line. The "buffer" is the automatically generated gap
+  #           (assignment_buffer_m) that separates the test region from the
+  #           rest; no pixels are invented, the gradient makes the transition.
+  #   val   = east-most fraction of the remaining area.
+  #   train = everything else (west/south/central).
+  #
+  # This matches the intended arrangement "Central+South (train) / East (val) /
+  # North+buffer (test)" as an explicitly artificial, reproducible partition.
+  # It is NOT an official administrative boundary; confirm with the project
+  # owner before the full run (see report / split_config.json).
+  # ---------------------------------------------------------------------------
+  method: directional_quantile     # only supported method
+  rotation_deg: 0                  # rotate partition axes (deg CCW) if desired
+  test_fraction: 0.20              # North + buffer
+  val_fraction: 0.15               # East
+  assignment_buffer_m: 0.0         # extra train-only gap between test and rest
+  min_pixels_per_split: 1000       # fail loudly if a split is implausibly small
