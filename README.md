@@ -383,6 +383,125 @@ These are deliberately left open and are **not** silently resolved:
 
 ---
 
+## Urban / rural reference masks for SUHI
+
+`scripts/generate_uhi_masks.py` is a standalone, **additive** utility that
+generates the urban and rural reference masks used *after* ConvLSTM inference to
+derive Surface Urban Heat Island (SUHI) intensity. It does **not** modify the
+frozen preprocessing pipeline, dataset contract, channels, normalization,
+patches or splits; it only reads canonical inputs and writes new rasters.
+
+```bash
+python scripts/generate_uhi_masks.py \
+    --worldcover      /path/to/ESA_WorldCover_10m_2021_v200_N12E075_Map.tif \
+    --study-boundary  /path/to/boundary.geojson \
+    --reference-grid  /path/to/processed_temporal/YYYY/Bengaluru_YYYY_MM_18features.tif \
+    --output-dir      /path/to/uhi_masks
+```
+
+Output:
+
+```
+uhi_masks/
+├── urban_mask.tif
+├── rural_mask.tif
+├── mask_metadata.json
+└── mask_validation.png        # validation only
+```
+
+The GeoTIFFs are binary `uint8` (`0 = false`, `1 = true`), nodata `0`, on the
+**exact model grid** (CRS, transform, pixel size, width, height, extent) taken
+from `--reference-grid`. The 10 m WorldCover raster is reprojected onto that grid
+with a **categorical `mode` (majority)** aggregation — never used directly as the
+output resolution — matching the existing preprocessing contract.
+
+### 1. Why the urban mask is WorldCover Built-up
+
+Urban heat island contrast requires an explicit, physically meaningful urban
+footprint rather than an index threshold. ESA WorldCover class **50 = Built-up**
+is used directly (`urban_mask = (WorldCover == 50)`), clipped to the study
+boundary. The WorldCover class legend is read from the GeoTIFF's `legend` tag and
+validated, so a mismatched product version is reported instead of silently
+assumed.
+
+### 2. How the 5 km rural reference region is constructed
+
+```
+urban extent          = built-up pixels (within the study boundary)
+rural candidate       = 5 km outward buffer(urban extent) − urban extent
+rural_mask            = rural candidate
+                        & WorldCover in retained classes
+                        & study boundary
+```
+
+The buffer is a true outward Euclidean distance-buffer computed on the projected
+30 m grid, so the reference ring is *peri-urban* — immediately outside the city,
+not simply "everything that isn't urban".
+
+### 3. Retained / excluded WorldCover classes
+
+Rural reference is restricted to vegetated / open land:
+
+| Retained | Label |
+|---:|---|
+| 10 | Tree cover |
+| 20 | Shrubland |
+| 30 | Grassland |
+| 40 | Cropland |
+| 60 | Bare / sparse vegetation |
+
+| Excluded | Label |
+|---:|---|
+| 50 | Built-up |
+| 70 | Snow and ice |
+| 80 | Permanent water bodies |
+| 90 | Herbaceous wetland |
+| 95 | Mangroves |
+| 100 | Moss and lichen |
+
+Class `0` (WorldCover nodata / outside tile coverage) is also excluded.
+
+### 4. Why the masks are separate from the ML dataset
+
+The ML dataset (`processed_dataset/`) is frozen and contains only model inputs
+and targets. The masks are a **post-inference evaluation definition**, produced
+as one full-study-area raster each (not per 128×128 patch). Keeping them separate
+means the urban/rural definition is globally consistent, reproducible, and
+re-runnable without touching the training data contract.
+
+### 5. How the masks will be used
+
+```
+Predicted LST(t+1)
+        ↓
+urban_mask → mean urban LST
+rural_mask → mean rural LST
+        ↓
+SUHI = mean(LST_urban) − mean(LST_rural)
+```
+
+A spatial map can also be produced as
+`UHI_map(x, y) = LST(x, y) − mean(LST_rural)`.
+
+### Validation performed by the script
+
+Identity of shape / CRS / transform / resolution against the reference grid,
+`urban_mask & rural_mask == 0`, nonzero pixel counts, urban and rural percentages
+of the study area, the exact list of retained rural classes, unexpected
+nodata/class values, and a quick PNG visualization (validation only).
+
+### Assumptions
+
+- The study boundary is the canonical BBMP GeoJSON; only its union footprint is
+  used.
+- "Urban extent" for the buffer is the WorldCover built-up footprint, and the
+  final masks are clipped to the study boundary (both are CLI-configurable via
+  `--rural-buffer-km`, `--urban-class`, `--no-clip-to-boundary`).
+- Mask nodata is documented as `0` to match the existing mask artifacts; for a
+  binary mask `0` is both "false" and "nodata".
+
+---
+
 ## Requirements
 
 ```
@@ -390,7 +509,7 @@ pip install -r requirements.txt
 ```
 
 `numpy`, `rasterio`, `affine`, `PyYAML`, `torch`, `geopandas`, `shapely`,
-`matplotlib`.
+`matplotlib`, `scipy`.
 
 ---
 
@@ -425,6 +544,8 @@ UHI-PreProcessing/
 ├── .gitignore
 ├── preprocess.py              # CLI entry point (test / full)
 ├── verify_dataset.py          # standalone dataset verifier
+├── scripts/
+│   └── generate_uhi_masks.py  # additive urban/rural mask utility (post-inference)
 └── uhi_split/
     ├── __init__.py
     ├── preprocess_config.yaml # configuration (paths are placeholders)
