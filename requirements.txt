@@ -10,3 +10,4 @@ torch>=2.0
 geopandas>=0.14
 shapely>=2.0
 matplotlib>=3.7
+scipy>=1.11
